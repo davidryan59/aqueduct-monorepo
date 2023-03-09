@@ -1,0 +1,130 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Red+Hat+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.Toastify__toast-container--bottom-right {
+    margin-bottom: 5rem;
+}
+
+.Toastify__toast-icon {
+    margin-bottom: 0.8rem;
+    margin-top: 0.2rem;
+}
+
+@layer components {
+    .centered-shadow {
+        box-shadow: 0px 0px 15px rgba(225, 225, 225);
+    }
+
+    .centered-shadow-dark {
+        box-shadow: 0px 0px 500px #0b1521;
+    }
+
+    .centered-shadow-sm {
+        box-shadow: 0px 0px 8px rgba(225, 225, 225);
+    }
+
+    .centered-shadow-sm-none {
+        box-shadow: 0px 0px 0px rgba(225, 225, 225);
+    }
+
+    .centered-shadow-sm-dark {
+        box-shadow: 0px 0px 12px rgba(225, 225, 225, 0.1);
+    }
+
+    .centered-shadow-md-dark {
+        box-shadow: 0px 0px 12px rgba(225, 225, 225, 0.2);
+    }
+
+    .centered-shadow-lg {
+        box-shadow: 0px 0px 35px rgba(215, 215, 215);
+    }
+
+    .poppins-font {
+        font-family: "Poppins", sans-serif;
+    }
+
+    .monospace-font {
+        font-family: "Red Hat Mono", monospace;
+    }
+
+    .blob {
+        background-image: url("/background.gif");
+    }
+
+    .bg-50 {
+        background-size: 50%;
+    }
+
+    .glow-pink-xs {
+        filter: drop-shadow(0px 0px 5px #e7018aaa)
+            drop-shadow(0px 0px 50px #e7018a);
+    }
+
+    .glow-yellow-xs {
+        filter: drop-shadow(0px 0px 5px #f5ac37aa)
+            drop-shadow(0px 0px 50px #f5ac37);
+    }
+
+    .glow-blue-xs {
+        filter: drop-shadow(0px 0px 5px #0460ce88)
+            drop-shadow(0px 0px 50px #0460cedd);
+    }
+
+    .textbox-outline {
+        box-shadow: 0 0 0 1px #0460ce;
+    }
+
+    .rotate-y-md {
+        transform: rotateY(25deg);
+    }
+
+    .-rotate-y-md {
+        transform: rotateY(-25deg);
+    }
+
+    .rotate-y-sm {
+        transform: rotateY(12deg);
+    }
+
+    .-rotate-y-sm {
+        transform: rotateY(-12deg);
+    }
+
+    .dark-border-color {
+        border-left: 2px solid black;
+        border-right: 2px solid rgb(113 113 122);
+        border-top: 2px solid black;
+        border-bottom: 2px solid black;
+    }
+
+    .animate-spin-slow {
+        animation: spin 5s linear infinite;
+    }
+
+    .animate-border {
+        animation: clippath 3s infinite -1.5s linear;
+    }
+}
+
+@keyframes clippath {
+    0%,
+    100% {
+        clip-path: inset(0 0 95% 0);
+    }
+
+    25% {
+        clip-path: inset(0 95% 0 0);
+    }
+
+    50% {
+        clip-path: inset(95% 0 0 0);
+    }
+
+    75% {
+        clip-path: inset(0 0 0 95%);
+    }
+}
