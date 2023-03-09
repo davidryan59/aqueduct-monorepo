@@ -1,0 +1,12 @@
+{
+    "name": "aqueduct-monorepo",
+    "version": "1.0.0",
+    "description": "monorepo for the aqueduct protocol",
+    "main": "packages",
+    "author": "JohnGuilding",
+    "license": "MIT",
+    "private": true,
+    "workspaces": [
+        "packages/*"
+    ]
+}
