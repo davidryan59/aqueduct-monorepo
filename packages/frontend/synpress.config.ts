@@ -1,7 +1,7 @@
 // eslint-disable-next-line import/no-extraneous-dependencies
 import { defineConfig } from "cypress";
 
-const getSynpressPath = () => "./node_modules/@synthetixio/synpress";
+const getSynpressPath = () => "../../node_modules/@synthetixio/synpress";
 // eslint-disable-next-line import/no-dynamic-require, @typescript-eslint/no-var-requires
 const importedSetupNodeEvents = require(`${getSynpressPath()}/plugins/index`);
 

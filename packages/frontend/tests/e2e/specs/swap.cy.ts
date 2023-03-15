@@ -54,7 +54,8 @@ describe("Test E2E Swap", () => {
     });
 
     beforeEach(() => {
-        // Prvents welcome message being shown between tests
+        cy.visit(`/`);
+        // Prevents welcome message being shown between tests
         window.localStorage.setItem("hide-welcome-message", "true");
     });
 
@@ -101,7 +102,7 @@ describe("Test E2E Swap", () => {
         }).should("exist");
     });
 
-    it("view swao", () => {
+    it("view swap", () => {
         Page.getMyStreamsPageButton().click();
 
         cy.findByText("fDAIxp").should("exist");
@@ -110,7 +111,8 @@ describe("Test E2E Swap", () => {
         cy.findByText("fUSDCxp").click();
     });
 
-    it("cancel swao", () => {
+    it("cancel swap", () => {
+        Page.getMyStreamsPageButton().click();
         MyStreamsPage.getDeleteStreamButton().click();
 
         cy.confirmMetamaskTransaction();
