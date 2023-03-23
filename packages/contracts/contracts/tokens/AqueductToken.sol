@@ -30,7 +30,10 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
        variables are added APPEND-ONLY. Re-ordering variables can
        permanently BREAK the deployed proxy contract. */
 
-    constructor(ISuperfluid host, ISuperAgreement aqueductHost)
+    constructor(
+        ISuperfluid host,
+        ISuperAgreement aqueductHost
+    )
         CustomSuperfluidToken(host, aqueductHost)
     // solhint-disable-next-line no-empty-blocks
     {
@@ -54,7 +57,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         _symbol = s;
 
         // REMOVE LATER: for quick testing
-        _balances[msg.sender] = 1000000000 * 10**18;
+        _balances[msg.sender] = 1000000000 * 10 ** 18;
 
         // register interfaces
         ERC777Helper.register(address(this));
@@ -369,39 +372,32 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         return _totalSupply;
     }
 
-    function balanceOf(address account)
-        public
-        view
-        override
-        returns (uint256 balance)
-    {
+    function balanceOf(
+        address account
+    ) public view override returns (uint256 balance) {
         // solhint-disable-next-line not-rely-on-time
         (int256 availableBalance, , , ) = super.realtimeBalanceOfNow(account);
         return availableBalance < 0 ? 0 : uint256(availableBalance);
     }
 
-    function transfer(address recipient, uint256 amount)
-        public
-        override
-        returns (bool)
-    {
+    function transfer(
+        address recipient,
+        uint256 amount
+    ) public override returns (bool) {
         return _transferFrom(msg.sender, msg.sender, recipient, amount);
     }
 
-    function allowance(address account, address spender)
-        public
-        view
-        override
-        returns (uint256)
-    {
+    function allowance(
+        address account,
+        address spender
+    ) public view override returns (uint256) {
         return _allowances[account][spender];
     }
 
-    function approve(address spender, uint256 amount)
-        public
-        override
-        returns (bool)
-    {
+    function approve(
+        address spender,
+        uint256 amount
+    ) public override returns (bool) {
         _approve(msg.sender, spender, amount);
         return true;
     }
@@ -414,11 +410,10 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         return _transferFrom(msg.sender, holder, recipient, amount);
     }
 
-    function increaseAllowance(address spender, uint256 addedValue)
-        public
-        override
-        returns (bool)
-    {
+    function increaseAllowance(
+        address spender,
+        uint256 addedValue
+    ) public override returns (bool) {
         _approve(
             msg.sender,
             spender,
@@ -427,11 +422,10 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         return true;
     }
 
-    function decreaseAllowance(address spender, uint256 subtractedValue)
-        public
-        override
-        returns (bool)
-    {
+    function decreaseAllowance(
+        address spender,
+        uint256 subtractedValue
+    ) public override returns (bool) {
         _approve(
             msg.sender,
             spender,
@@ -460,15 +454,13 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
     }
 
     function burn(uint256 amount, bytes calldata data) external override {
-        _downgrade(msg.sender, msg.sender, amount, data, "");
+        _downgrade(msg.sender, msg.sender, msg.sender, amount, data, "");
     }
 
-    function isOperatorFor(address operator, address tokenHolder)
-        external
-        view
-        override
-        returns (bool)
-    {
+    function isOperatorFor(
+        address operator,
+        address tokenHolder
+    ) external view override returns (bool) {
         return _operators.isOperatorFor(operator, tokenHolder);
     }
 
@@ -519,7 +511,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
             _operators.isOperatorFor(operator, account),
             "SuperToken: caller is not an operator for holder"
         );
-        _downgrade(operator, account, amount, data, operatorData);
+        _downgrade(operator, account, account, amount, data, operatorData);
     }
 
     function _setupDefaultOperators(address[] memory operators) internal {
@@ -539,7 +531,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
             msg.sender,
             account,
             amount,
-            false, /* requireReceptionAck */
+            false /* requireReceptionAck */,
             userData,
             new bytes(0)
         );
@@ -603,7 +595,12 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
 
     /// @dev ISuperToken.downgrade implementation
     function downgrade(uint256 amount) external override {
-        _downgrade(msg.sender, msg.sender, amount, "", "");
+        _downgrade(msg.sender, msg.sender, msg.sender, amount, "", "");
+    }
+
+    /// @inheritdoc ISuperToken
+    function downgradeTo(address to, uint256 amount) external override {
+        _downgrade(msg.sender, msg.sender, to, amount, "", "");
     }
 
     function _upgrade(
@@ -651,8 +648,9 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
     }
 
     function _downgrade(
-        address operator,
-        address account,
+        address operator, // the account executing the transaction
+        address account, // the account whose super tokens we are burning
+        address to, // the account receiving the underlying tokens
         uint256 amount,
         bytes memory data,
         bytes memory operatorData
@@ -671,7 +669,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         _burn(operator, account, adjustedAmount, data, operatorData);
 
         uint256 amountBefore = _underlyingToken.balanceOf(address(this));
-        _underlyingToken.safeTransfer(account, underlyingAmount);
+        _underlyingToken.safeTransfer(to, underlyingAmount);
         uint256 amountAfter = _underlyingToken.balanceOf(address(this));
         uint256 actualDowngradedAmount = amountBefore - amountAfter;
         require(
@@ -685,23 +683,21 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
     /**
      * @dev Handle decimal differences between underlying token and super token
      */
-    function _toUnderlyingAmount(uint256 amount)
-        private
-        view
-        returns (uint256 underlyingAmount, uint256 adjustedAmount)
-    {
+    function _toUnderlyingAmount(
+        uint256 amount
+    ) private view returns (uint256 underlyingAmount, uint256 adjustedAmount) {
         uint256 factor;
         if (_underlyingDecimals < _STANDARD_DECIMALS) {
             // if underlying has less decimals
             // one can upgrade less "granualar" amount of tokens
-            factor = 10**(_STANDARD_DECIMALS - _underlyingDecimals);
+            factor = 10 ** (_STANDARD_DECIMALS - _underlyingDecimals);
             underlyingAmount = amount / factor;
             // remove precision errors
             adjustedAmount = underlyingAmount * factor;
         } else if (_underlyingDecimals > _STANDARD_DECIMALS) {
             // if underlying has more decimals
             // one can upgrade more "granualar" amount of tokens
-            factor = 10**(_underlyingDecimals - _STANDARD_DECIMALS);
+            factor = 10 ** (_underlyingDecimals - _STANDARD_DECIMALS);
             underlyingAmount = amount * factor;
             adjustedAmount = amount;
         } else {
@@ -721,6 +717,29 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         _approve(account, spender, amount);
     }
 
+    function operationIncreaseAllowance(
+        address account,
+        address spender,
+        uint256 addedValue
+    ) external override onlyHost {
+        _approve(account, spender, _allowances[account][spender] + addedValue);
+    }
+
+    function operationDecreaseAllowance(
+        address account,
+        address spender,
+        uint256 subtractedValue
+    ) external override onlyHost {
+        _approve(
+            account,
+            spender,
+            _allowances[account][spender].sub(
+                subtractedValue,
+                "SuperToken: decreased allowance below zero"
+            )
+        );
+    }
+
     function operationTransferFrom(
         address account,
         address spender,
@@ -730,20 +749,27 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         _transferFrom(account, spender, recipient, amount);
     }
 
-    function operationUpgrade(address account, uint256 amount)
-        external
-        override
-        onlyHost
-    {
+    function operationSend(
+        address spender,
+        address recipient,
+        uint256 amount,
+        bytes memory userData
+    ) external override onlyHost {
+        _send(msg.sender, spender, recipient, amount, userData, "", true);
+    }
+
+    function operationUpgrade(
+        address account,
+        uint256 amount
+    ) external override onlyHost {
         _upgrade(msg.sender, account, account, amount, "", "");
     }
 
-    function operationDowngrade(address account, uint256 amount)
-        external
-        override
-        onlyHost
-    {
-        _downgrade(msg.sender, account, amount, "", "");
+    function operationDowngrade(
+        address account,
+        uint256 amount
+    ) external override onlyHost {
+        _downgrade(msg.sender, account, account, amount, "", "");
     }
 
     /**************************************************************************

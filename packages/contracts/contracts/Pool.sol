@@ -9,6 +9,7 @@ import {IConstantFlowAgreementV1} from "@superfluid-finance/ethereum-contracts/c
 import "./libraries/UQ128x128.sol";
 import "./interfaces/IAqueductHost.sol";
 import "./interfaces/IAqueductToken.sol";
+import "./interfaces/IFlowScheduler.sol";
 
 import "hardhat/console.sol";
 
@@ -37,6 +38,11 @@ contract Pool is SuperAppBase {
     uint256 token0RewardIndexId;
     uint256 token1RewardIndexId;
 
+    /* --- Automation --- */
+    IFlowScheduler public flowScheduler;
+
+    error STREAM_END_DATE_BEFORE_NOW();
+
     constructor(ISuperfluid host) payable {
         assert(address(host) != address(0));
 
@@ -58,12 +64,14 @@ contract Pool is SuperAppBase {
     function initialize(
         IAqueductToken _token0,
         IAqueductToken _token1,
-        uint224 _poolFee
+        uint224 _poolFee,
+        IFlowScheduler _flowScheduler
     ) external {
         require(msg.sender == factory, "FORBIDDEN"); // sufficient check
         token0 = _token0;
         token1 = _token1;
         poolFee = _poolFee;
+        flowScheduler = _flowScheduler;
 
         // create indices
         token0IndexId = createIndex(_token0, address(this));
@@ -125,11 +133,7 @@ contract Pool is SuperAppBase {
     )
         external
         view
-        returns (
-            int256 dynamicBalance,
-            uint256 deposit,
-            uint256 owedDeposit
-        )
+        returns (int256 dynamicBalance, uint256 deposit, uint256 owedDeposit)
     {
         // as a subscriber
         {
@@ -194,10 +198,10 @@ contract Pool is SuperAppBase {
         owedDeposit = 0;
     }
 
-    function createIndex(ISuperfluidToken token, address publisher)
-        internal
-        returns (uint256 iId)
-    {
+    function createIndex(
+        ISuperfluidToken token,
+        address publisher
+    ) internal returns (uint256 iId) {
         // get next index / increment counter
         iId = nextIndexId;
         nextIndexId++;
@@ -237,10 +241,12 @@ contract Pool is SuperAppBase {
 
         // update index
         indexData[iId].totalFlowRate = totalFlowRate;
-        indexData[iId].blockTimestampLast = uint32(block.timestamp % 2**32);
+        indexData[iId].blockTimestampLast = uint32(block.timestamp % 2 ** 32);
     }
 
-    function getIndexData(uint256 iId)
+    function getIndexData(
+        uint256 iId
+    )
         public
         view
         returns (
@@ -330,7 +336,7 @@ contract Pool is SuperAppBase {
         );
         indexData[iId].totalUnits -= sdata.units;
         indexData[iId].totalUnits += units;
-        indexData[iId].blockTimestampLast = uint32(block.timestamp % 2**32);
+        indexData[iId].blockTimestampLast = uint32(block.timestamp % 2 ** 32);
 
         // update subscription
         subscriberData[account][idata.token].subscriptions[iId].units = units;
@@ -444,6 +450,55 @@ contract Pool is SuperAppBase {
         ); // assuming 1% pool fee
     }
 
+    function createFlowSchedule(
+        ISuperToken _superToken,
+        address _sender,
+        uint256 _endDate
+    ) internal {
+        if (_endDate <= block.timestamp) revert STREAM_END_DATE_BEFORE_NOW();
+
+        _grantFlowOperatorPermissions(
+            address(_superToken),
+            address(flowScheduler)
+        );
+
+        flowScheduler.createFlowSchedule(
+            _superToken,
+            address(this), // stream receiver
+            uint32(0), // start date
+            uint32(0), // start date max delay
+            int96(0), // flow rate
+            uint256(0), // start amount
+            uint32(_endDate),
+            "0x",
+            "0x"
+        );
+    }
+
+    /**
+     * @param _flowSuperToken Super token address
+     * @param _flowOperator The permission grantee address
+     */
+    function _grantFlowOperatorPermissions(
+        address _flowSuperToken,
+        address _flowOperator
+    ) internal {
+        _host.callAgreement(
+            cfa,
+            abi.encodeCall(
+                cfa.updateFlowOperatorPermissions,
+                (
+                    IAqueductToken(_flowSuperToken),
+                    _flowOperator,
+                    4, // bitmask representation of delete
+                    0, // flow rate allowance
+                    new bytes(0) // ctx
+                )
+            ),
+            "0x"
+        );
+    }
+
     function afterAgreementCreated(
         ISuperToken _superToken,
         address, //_agreementClass,
@@ -453,6 +508,13 @@ contract Pool is SuperAppBase {
         bytes calldata _ctx
     ) external override onlyHost returns (bytes memory newCtx) {
         _handleCallback(_superToken, _agreementData);
+
+        // ISuperfluid.Context memory context = _host.decodeCtx(_ctx);
+        // uint256 endDate = abi.decode(context.userData, (uint256));
+        // if (endDate != 0) {
+        //     createFlowSchedule(_superToken, context.msgSender, endDate);
+        // }
+
         newCtx = _ctx;
     }
 
@@ -465,6 +527,13 @@ contract Pool is SuperAppBase {
         bytes calldata _ctx
     ) external override onlyHost returns (bytes memory newCtx) {
         _handleCallback(_superToken, _agreementData);
+
+        // ISuperfluid.Context memory context = _host.decodeCtx(_ctx);
+        // uint256 endDate = abi.decode(context.userData, (uint256));
+        // if (endDate != 0) {
+        //     createFlowSchedule(_superToken, context.msgSender, endDate);
+        // }
+
         newCtx = _ctx;
     }
 
@@ -484,16 +553,17 @@ contract Pool is SuperAppBase {
      * Helpers
      *************************************************************************/
 
-    function getFlowRateIn(ISuperToken token, address user)
-        internal
-        view
-        returns (uint128)
-    {
+    function getFlowRateIn(
+        ISuperToken token,
+        address user
+    ) internal view returns (uint128) {
         (, int96 flowRate, , ) = cfa.getFlow(token, user, address(this));
         return uint128(uint96(flowRate));
     }
 
-    function getIndexIds(ISuperToken token)
+    function getIndexIds(
+        ISuperToken token
+    )
         internal
         view
         returns (

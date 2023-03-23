@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.14;
+pragma solidity ^0.8.14;
 
 import {ISuperfluid, ISuperAgreement, ISuperfluidGovernance, ISuperfluidToken, SafeCast, EventsEmitter, FixedSizeData} from "@superfluid-finance/ethereum-contracts/contracts/superfluid/SuperfluidToken.sol";
 import {IERC20} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
@@ -101,15 +101,14 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
      *************************************************************************/
 
     /// @dev ISuperfluidToken.realtimeBalanceOf implementation
-    function realtimeBalanceOf(address account, uint256 timestamp)
+    function realtimeBalanceOf(
+        address account,
+        uint256 timestamp
+    )
         public
         view
         override
-        returns (
-            int256 availableBalance,
-            uint256 deposit,
-            uint256 owedDeposit
-        )
+        returns (int256 availableBalance, uint256 deposit, uint256 owedDeposit)
     {
         availableBalance = _balances[account];
         ISuperAgreement[] memory activeAgreements = getAccountActiveAgreements(
@@ -145,7 +144,9 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
     }
 
     /// @dev ISuperfluidToken.realtimeBalanceOfNow implementation
-    function realtimeBalanceOfNow(address account)
+    function realtimeBalanceOfNow(
+        address account
+    )
         public
         view
         override
@@ -163,31 +164,24 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
         );
     }
 
-    function isAccountCritical(address account, uint256 timestamp)
-        public
-        view
-        override
-        returns (bool isCritical)
-    {
+    function isAccountCritical(
+        address account,
+        uint256 timestamp
+    ) public view override returns (bool isCritical) {
         (int256 availableBalance, , ) = realtimeBalanceOf(account, timestamp);
         return availableBalance < 0;
     }
 
-    function isAccountCriticalNow(address account)
-        external
-        view
-        override
-        returns (bool isCritical)
-    {
+    function isAccountCriticalNow(
+        address account
+    ) external view override returns (bool isCritical) {
         return isAccountCritical(account, _host.getNow());
     }
 
-    function isAccountSolvent(address account, uint256 timestamp)
-        public
-        view
-        override
-        returns (bool isSolvent)
-    {
+    function isAccountSolvent(
+        address account,
+        uint256 timestamp
+    ) public view override returns (bool isSolvent) {
         (
             int256 availableBalance,
             uint256 deposit,
@@ -199,22 +193,16 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
         return realtimeBalance >= 0;
     }
 
-    function isAccountSolventNow(address account)
-        external
-        view
-        override
-        returns (bool isSolvent)
-    {
+    function isAccountSolventNow(
+        address account
+    ) external view override returns (bool isSolvent) {
         return isAccountSolvent(account, _host.getNow());
     }
 
     /// @dev ISuperfluidToken.getAccountActiveAgreements implementation
-    function getAccountActiveAgreements(address account)
-        public
-        view
-        override
-        returns (ISuperAgreement[] memory)
-    {
+    function getAccountActiveAgreements(
+        address account
+    ) public view override returns (ISuperAgreement[] memory) {
         return _host.mapAgreementClasses(~_inactiveAgreementBitmap[account]);
     }
 
@@ -240,11 +228,7 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
         _totalSupply = _totalSupply - amount;
     }
 
-    function _move(
-        address from,
-        address to,
-        int256 amount
-    ) internal {
+    function _move(address from, address to, int256 amount) internal {
         (int256 availableBalance, , ) = realtimeBalanceOf(from, _host.getNow());
         require(
             availableBalance >= amount,
@@ -268,10 +252,10 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
      *************************************************************************/
 
     /// @dev ISuperfluidToken.createAgreement implementation
-    function createAgreement(bytes32 id, bytes32[] calldata data)
-        external
-        override
-    {
+    function createAgreement(
+        bytes32 id,
+        bytes32[] calldata data
+    ) external override {
         address agreementClass = msg.sender;
         bytes32 slot = keccak256(
             abi.encode("AgreementData", agreementClass, id)
@@ -297,10 +281,10 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
     }
 
     /// @dev ISuperfluidToken.updateAgreementData implementation
-    function updateAgreementData(bytes32 id, bytes32[] calldata data)
-        external
-        override
-    {
+    function updateAgreementData(
+        bytes32 id,
+        bytes32[] calldata data
+    ) external override {
         address agreementClass = msg.sender;
         bytes32 slot = keccak256(
             abi.encode("AgreementData", agreementClass, id)
@@ -310,10 +294,10 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
     }
 
     /// @dev ISuperfluidToken.terminateAgreement implementation
-    function terminateAgreement(bytes32 id, uint256 dataLength)
-        external
-        override
-    {
+    function terminateAgreement(
+        bytes32 id,
+        uint256 dataLength
+    ) external override {
         address agreementClass = msg.sender;
         bytes32 slot = keccak256(
             abi.encode("AgreementData", agreementClass, id)
@@ -353,11 +337,10 @@ abstract contract CustomSuperfluidToken is ISuperfluidToken {
     }
 
     /// @dev ISuperfluidToken.settleBalance implementation
-    function settleBalance(address account, int256 delta)
-        external
-        override
-        onlyAgreement
-    {
+    function settleBalance(
+        address account,
+        int256 delta
+    ) external override onlyAgreement {
         _balances[account] = _balances[account] + delta;
     }
 
