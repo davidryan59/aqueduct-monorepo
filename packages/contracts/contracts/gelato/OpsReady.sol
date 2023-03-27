@@ -15,8 +15,7 @@ abstract contract OpsReady {
     address public immutable dedicatedMsgSender;
     address private immutable _gelato;
     address internal constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-    address private constant OPS_PROXY_FACTORY =
-        0xC815dB16D4be6ddf2685C201937905aBf338F5D7;
+    address private constant OPS_PROXY_FACTORY = 0xC815dB16D4be6ddf2685C201937905aBf338F5D7;
 
     /**
      * @dev
@@ -35,9 +34,7 @@ abstract contract OpsReady {
     constructor(address _ops, address _taskCreator) {
         ops = IOps(_ops);
         _gelato = IOps(_ops).gelato();
-        (dedicatedMsgSender, ) = IOpsProxyFactory(OPS_PROXY_FACTORY).getProxyOf(
-            _taskCreator
-        );
+        (dedicatedMsgSender, ) = IOpsProxyFactory(OPS_PROXY_FACTORY).getProxyOf(_taskCreator);
     }
 
     /**
@@ -55,11 +52,7 @@ abstract contract OpsReady {
         }
     }
 
-    function _getFeeDetails()
-        internal
-        view
-        returns (uint256 fee, address feeToken)
-    {
+    function _getFeeDetails() internal view returns (uint256 fee, address feeToken) {
         (fee, feeToken) = ops.getFeeDetails();
     }
 }

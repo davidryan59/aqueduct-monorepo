@@ -5,11 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 // THIS CONTRACT IS USED FOR TESTING PURPOSES ONLY
 contract MockERC20 is ERC20 {
-    constructor(
-        string memory name,
-        string memory symbol,
-        uint256 supply
-    ) ERC20(name, symbol) {
+    constructor(string memory name, string memory symbol, uint256 supply) ERC20(name, symbol) {
         _mint(msg.sender, supply);
     }
 

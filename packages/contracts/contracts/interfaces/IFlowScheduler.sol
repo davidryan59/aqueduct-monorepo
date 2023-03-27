@@ -51,11 +51,7 @@ interface IFlowScheduler {
      * @param sender The sender account
      * @param receiver The receiver account
      */
-    event FlowScheduleDeleted(
-        ISuperToken indexed superToken,
-        address indexed sender,
-        address indexed receiver
-    );
+    event FlowScheduleDeleted(ISuperToken indexed superToken, address indexed sender, address indexed receiver);
 
     /**
      * @dev Emitted when the start of a stream is executed
