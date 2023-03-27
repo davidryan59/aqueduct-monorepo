@@ -1,8 +1,8 @@
 import Token from "../types/Token";
 import { TokenOption } from "../types/TokenOption";
-import { ETHxp, fDAI, fDAIxp, fUSDC, fUSDCxp } from "./constants";
+import { /* ETHxp, */ fDAI, fDAIxp, fUSDC, fUSDCxp } from "./constants";
 
-import ethLogo from "../../public/eth-logo.png";
+// import ethLogo from "../../public/eth-logo.png";
 import daiLogo from "../../public/dai-logo.png";
 import usdcLogo from "../../public/usdc-logo.png";
 

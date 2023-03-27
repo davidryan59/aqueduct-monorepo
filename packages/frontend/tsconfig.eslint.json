@@ -1,5 +1,14 @@
 {
     "extends": "./tsconfig.json",
-    "include": ["*.js", "**/*.ts", "**/*.tsx"],
+    "include": [
+        "*.js",
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "src/**/*",
+        "tests/**/*",
+        "global-types.d.ts",
+        "next-env.d.ts",
+        "synpress.config.ts"
+    ],
     "exclude": ["node_modules"]
 }

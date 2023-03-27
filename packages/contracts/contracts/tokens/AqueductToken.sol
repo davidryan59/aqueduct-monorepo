@@ -34,11 +34,8 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         ISuperfluid host,
         ISuperAgreement aqueductHost
     )
-        CustomSuperfluidToken(host, aqueductHost)
-    // solhint-disable-next-line no-empty-blocks
-    {
-
-    }
+        CustomSuperfluidToken(host, aqueductHost) // solhint-disable-next-line no-empty-blocks
+    {}
 
     function initialize(
         IERC20 underlyingToken,
@@ -64,17 +61,11 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
     }
 
     function proxiableUUID() public pure override returns (bytes32) {
-        return
-            keccak256(
-                "org.superfluid-finance.contracts.SuperToken.implementation"
-            );
+        return keccak256("org.superfluid-finance.contracts.SuperToken.implementation");
     }
 
     function updateCode(address newAddress) external override {
-        require(
-            msg.sender == address(_host),
-            "SuperToken: only host can update code"
-        );
+        require(msg.sender == address(_host), "SuperToken: only host can update code");
         UUPSProxiable._updateCodeAddress(newAddress);
     }
 
@@ -106,17 +97,9 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
      * Interactions relying on ERC777 hooks need to use the ERC777 interface.
      * For more context, see https://github.com/superfluid-finance/protocol-monorepo/wiki/About-ERC-777
      */
-    function _transferFrom(
-        address spender,
-        address holder,
-        address recipient,
-        uint256 amount
-    ) internal returns (bool) {
+    function _transferFrom(address spender, address holder, address recipient, uint256 amount) internal returns (bool) {
         require(holder != address(0), "SuperToken: transfer from zero address");
-        require(
-            recipient != address(0),
-            "SuperToken: transfer to zero address"
-        );
+        require(recipient != address(0), "SuperToken: transfer to zero address");
 
         address operator = msg.sender;
 
@@ -126,10 +109,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
             _approve(
                 holder,
                 spender,
-                _allowances[holder][spender].sub(
-                    amount,
-                    "SuperToken: transfer amount exceeds allowance"
-                )
+                _allowances[holder][spender].sub(amount, "SuperToken: transfer amount exceeds allowance")
             );
         }
 
@@ -162,15 +142,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
 
         _move(operator, from, to, amount, userData, operatorData);
 
-        _callTokensReceived(
-            operator,
-            from,
-            to,
-            amount,
-            userData,
-            operatorData,
-            requireReceptionAck
-        );
+        _callTokensReceived(operator, from, to, amount, userData, operatorData, requireReceptionAck);
     }
 
     function _move(
@@ -216,15 +188,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
 
         CustomSuperfluidToken._mint(account, amount);
 
-        _callTokensReceived(
-            operator,
-            address(0),
-            account,
-            amount,
-            userData,
-            operatorData,
-            requireReceptionAck
-        );
+        _callTokensReceived(operator, address(0), account, amount, userData, operatorData, requireReceptionAck);
 
         emit Minted(operator, account, amount, userData, operatorData);
         emit Transfer(address(0), account, amount);
@@ -246,14 +210,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
     ) internal {
         require(from != address(0), "SuperToken: burn from zero address");
 
-        _callTokensToSend(
-            operator,
-            from,
-            address(0),
-            amount,
-            userData,
-            operatorData
-        );
+        _callTokensToSend(operator, from, address(0), amount, userData, operatorData);
 
         CustomSuperfluidToken._burn(from, amount);
 
@@ -274,11 +231,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
      * - `account` cannot be the zero address.
      * - `spender` cannot be the zero address.
      */
-    function _approve(
-        address account,
-        address spender,
-        uint256 amount
-    ) internal {
+    function _approve(address account, address spender, uint256 amount) internal {
         require(account != address(0), "SuperToken: approve from zero address");
         require(spender != address(0), "SuperToken: approve to zero address");
 
@@ -303,21 +256,12 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         bytes memory userData,
         bytes memory operatorData
     ) private {
-        address implementer = ERC777Helper
-            ._ERC1820_REGISTRY
-            .getInterfaceImplementer(
-                from,
-                ERC777Helper._TOKENS_SENDER_INTERFACE_HASH
-            );
+        address implementer = ERC777Helper._ERC1820_REGISTRY.getInterfaceImplementer(
+            from,
+            ERC777Helper._TOKENS_SENDER_INTERFACE_HASH
+        );
         if (implementer != address(0)) {
-            IERC777Sender(implementer).tokensToSend(
-                operator,
-                from,
-                to,
-                amount,
-                userData,
-                operatorData
-            );
+            IERC777Sender(implementer).tokensToSend(operator, from, to, amount, userData, operatorData);
         }
     }
 
@@ -341,26 +285,14 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         bytes memory operatorData,
         bool requireReceptionAck
     ) private {
-        address implementer = ERC777Helper
-            ._ERC1820_REGISTRY
-            .getInterfaceImplementer(
-                to,
-                ERC777Helper._TOKENS_RECIPIENT_INTERFACE_HASH
-            );
+        address implementer = ERC777Helper._ERC1820_REGISTRY.getInterfaceImplementer(
+            to,
+            ERC777Helper._TOKENS_RECIPIENT_INTERFACE_HASH
+        );
         if (implementer != address(0)) {
-            IERC777Recipient(implementer).tokensReceived(
-                operator,
-                from,
-                to,
-                amount,
-                userData,
-                operatorData
-            );
+            IERC777Recipient(implementer).tokensReceived(operator, from, to, amount, userData, operatorData);
         } else if (requireReceptionAck) {
-            require(
-                !to.isContract(),
-                "SuperToken: not an ERC777TokensRecipient"
-            );
+            require(!to.isContract(), "SuperToken: not an ERC777TokensRecipient");
         }
     }
 
@@ -372,67 +304,39 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         return _totalSupply;
     }
 
-    function balanceOf(
-        address account
-    ) public view override returns (uint256 balance) {
+    function balanceOf(address account) public view override returns (uint256 balance) {
         // solhint-disable-next-line not-rely-on-time
         (int256 availableBalance, , , ) = super.realtimeBalanceOfNow(account);
         return availableBalance < 0 ? 0 : uint256(availableBalance);
     }
 
-    function transfer(
-        address recipient,
-        uint256 amount
-    ) public override returns (bool) {
+    function transfer(address recipient, uint256 amount) public override returns (bool) {
         return _transferFrom(msg.sender, msg.sender, recipient, amount);
     }
 
-    function allowance(
-        address account,
-        address spender
-    ) public view override returns (uint256) {
+    function allowance(address account, address spender) public view override returns (uint256) {
         return _allowances[account][spender];
     }
 
-    function approve(
-        address spender,
-        uint256 amount
-    ) public override returns (bool) {
+    function approve(address spender, uint256 amount) public override returns (bool) {
         _approve(msg.sender, spender, amount);
         return true;
     }
 
-    function transferFrom(
-        address holder,
-        address recipient,
-        uint256 amount
-    ) public override returns (bool) {
+    function transferFrom(address holder, address recipient, uint256 amount) public override returns (bool) {
         return _transferFrom(msg.sender, holder, recipient, amount);
     }
 
-    function increaseAllowance(
-        address spender,
-        uint256 addedValue
-    ) public override returns (bool) {
-        _approve(
-            msg.sender,
-            spender,
-            _allowances[msg.sender][spender] + addedValue
-        );
+    function increaseAllowance(address spender, uint256 addedValue) public override returns (bool) {
+        _approve(msg.sender, spender, _allowances[msg.sender][spender] + addedValue);
         return true;
     }
 
-    function decreaseAllowance(
-        address spender,
-        uint256 subtractedValue
-    ) public override returns (bool) {
+    function decreaseAllowance(address spender, uint256 subtractedValue) public override returns (bool) {
         _approve(
             msg.sender,
             spender,
-            _allowances[msg.sender][spender].sub(
-                subtractedValue,
-                "SuperToken: decreased allowance below zero"
-            )
+            _allowances[msg.sender][spender].sub(subtractedValue, "SuperToken: decreased allowance below zero")
         );
         return true;
     }
@@ -445,11 +349,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         return 1;
     }
 
-    function send(
-        address recipient,
-        uint256 amount,
-        bytes calldata data
-    ) external override {
+    function send(address recipient, uint256 amount, bytes calldata data) external override {
         _send(msg.sender, msg.sender, recipient, amount, data, "", true);
     }
 
@@ -457,10 +357,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         _downgrade(msg.sender, msg.sender, msg.sender, amount, data, "");
     }
 
-    function isOperatorFor(
-        address operator,
-        address tokenHolder
-    ) external view override returns (bool) {
+    function isOperatorFor(address operator, address tokenHolder) external view override returns (bool) {
         return _operators.isOperatorFor(operator, tokenHolder);
     }
 
@@ -476,12 +373,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         emit RevokedOperator(operator, holder);
     }
 
-    function defaultOperators()
-        external
-        view
-        override
-        returns (address[] memory)
-    {
+    function defaultOperators() external view override returns (address[] memory) {
         return ERC777Helper.defaultOperators(_operators);
     }
 
@@ -493,10 +385,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         bytes calldata operatorData
     ) external override {
         address operator = msg.sender;
-        require(
-            _operators.isOperatorFor(operator, sender),
-            "SuperToken: caller is not an operator for holder"
-        );
+        require(_operators.isOperatorFor(operator, sender), "SuperToken: caller is not an operator for holder");
         _send(operator, sender, recipient, amount, data, operatorData, true);
     }
 
@@ -507,10 +396,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         bytes calldata operatorData
     ) external override {
         address operator = msg.sender;
-        require(
-            _operators.isOperatorFor(operator, account),
-            "SuperToken: caller is not an operator for holder"
-        );
+        require(_operators.isOperatorFor(operator, account), "SuperToken: caller is not an operator for holder");
         _downgrade(operator, account, account, amount, data, operatorData);
     }
 
@@ -522,34 +408,15 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
      * SuperToken custom token functions
      *************************************************************************/
 
-    function selfMint(
-        address account,
-        uint256 amount,
-        bytes memory userData
-    ) external override onlySelf {
-        _mint(
-            msg.sender,
-            account,
-            amount,
-            false /* requireReceptionAck */,
-            userData,
-            new bytes(0)
-        );
+    function selfMint(address account, uint256 amount, bytes memory userData) external override onlySelf {
+        _mint(msg.sender, account, amount, false /* requireReceptionAck */, userData, new bytes(0));
     }
 
-    function selfBurn(
-        address account,
-        uint256 amount,
-        bytes memory userData
-    ) external override onlySelf {
+    function selfBurn(address account, uint256 amount, bytes memory userData) external override onlySelf {
         _burn(msg.sender, account, amount, userData, new bytes(0));
     }
 
-    function selfApproveFor(
-        address account,
-        address spender,
-        uint256 amount
-    ) external override onlySelf {
+    function selfApproveFor(address account, address spender, uint256 amount) external override onlySelf {
         _approve(account, spender, amount);
     }
 
@@ -585,11 +452,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
     }
 
     /// @dev ISuperToken.upgradeTo implementation
-    function upgradeTo(
-        address to,
-        uint256 amount,
-        bytes calldata data
-    ) external override {
+    function upgradeTo(address to, uint256 amount, bytes calldata data) external override {
         _upgrade(msg.sender, msg.sender, to, amount, "", data);
     }
 
@@ -611,28 +474,15 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         bytes memory userData,
         bytes memory operatorData
     ) private {
-        require(
-            address(_underlyingToken) != address(0),
-            "SuperToken: no underlying token"
-        );
+        require(address(_underlyingToken) != address(0), "SuperToken: no underlying token");
 
-        (
-            uint256 underlyingAmount,
-            uint256 adjustedAmount
-        ) = _toUnderlyingAmount(amount);
+        (uint256 underlyingAmount, uint256 adjustedAmount) = _toUnderlyingAmount(amount);
 
         uint256 amountBefore = _underlyingToken.balanceOf(address(this));
-        _underlyingToken.safeTransferFrom(
-            account,
-            address(this),
-            underlyingAmount
-        );
+        _underlyingToken.safeTransferFrom(account, address(this), underlyingAmount);
         uint256 amountAfter = _underlyingToken.balanceOf(address(this));
         uint256 actualUpgradedAmount = amountAfter - amountBefore;
-        require(
-            underlyingAmount == actualUpgradedAmount,
-            "SuperToken: inflationary/deflationary tokens not supported"
-        );
+        require(underlyingAmount == actualUpgradedAmount, "SuperToken: inflationary/deflationary tokens not supported");
 
         _mint(
             operator,
@@ -655,15 +505,9 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         bytes memory data,
         bytes memory operatorData
     ) private {
-        require(
-            address(_underlyingToken) != address(0),
-            "SuperToken: no underlying token"
-        );
+        require(address(_underlyingToken) != address(0), "SuperToken: no underlying token");
 
-        (
-            uint256 underlyingAmount,
-            uint256 adjustedAmount
-        ) = _toUnderlyingAmount(amount);
+        (uint256 underlyingAmount, uint256 adjustedAmount) = _toUnderlyingAmount(amount);
 
         // _burn will check the (actual) amount availability again
         _burn(operator, account, adjustedAmount, data, operatorData);
@@ -709,11 +553,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
      * Superfluid Batch Operations
      *************************************************************************/
 
-    function operationApprove(
-        address account,
-        address spender,
-        uint256 amount
-    ) external override onlyHost {
+    function operationApprove(address account, address spender, uint256 amount) external override onlyHost {
         _approve(account, spender, amount);
     }
 
@@ -733,10 +573,7 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         _approve(
             account,
             spender,
-            _allowances[account][spender].sub(
-                subtractedValue,
-                "SuperToken: decreased allowance below zero"
-            )
+            _allowances[account][spender].sub(subtractedValue, "SuperToken: decreased allowance below zero")
         );
     }
 
@@ -758,17 +595,11 @@ contract AqueductToken is UUPSProxiable, CustomSuperfluidToken, ISuperToken {
         _send(msg.sender, spender, recipient, amount, userData, "", true);
     }
 
-    function operationUpgrade(
-        address account,
-        uint256 amount
-    ) external override onlyHost {
+    function operationUpgrade(address account, uint256 amount) external override onlyHost {
         _upgrade(msg.sender, account, account, amount, "", "");
     }
 
-    function operationDowngrade(
-        address account,
-        uint256 amount
-    ) external override onlyHost {
+    function operationDowngrade(address account, uint256 amount) external override onlyHost {
         _downgrade(msg.sender, account, account, amount, "", "");
     }
 

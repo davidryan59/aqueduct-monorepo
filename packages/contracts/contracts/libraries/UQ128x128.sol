@@ -7,7 +7,7 @@ pragma solidity ^0.8.0;
 // resolution: 1 / 2**128
 
 library UQ128x128 {
-    uint256 public constant Q128 = 2**128;
+    uint256 public constant Q128 = 2 ** 128;
 
     // decode a UQ128x128 to a uint128
     function decode(uint256 z) internal pure returns (uint256 y) {
@@ -17,7 +17,7 @@ library UQ128x128 {
     // halfway decode a UQ128x128 by dividing by 2^64
     // used to prevent overflow in certain circumstances
     function halfDecode(uint256 z) internal pure returns (uint256 y) {
-        y = z / 2**64;
+        y = z / 2 ** 64;
     }
 
     // encode a uint128 as a UQ128x128

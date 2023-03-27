@@ -9,8 +9,7 @@ contract fTokenDistributor {
     /* --- Superfluid --- */
     using CFAv1Library for CFAv1Library.InitData;
     CFAv1Library.InitData public cfaV1;
-    bytes32 public constant CFA_ID =
-        keccak256("org.superfluid-finance.agreements.ConstantFlowAgreement.v1");
+    bytes32 public constant CFA_ID = keccak256("org.superfluid-finance.agreements.ConstantFlowAgreement.v1");
     IConstantFlowAgreementV1 cfa;
     ISuperfluid _host;
 
@@ -46,16 +45,10 @@ contract fTokenDistributor {
         // only send a discrete amount once per user
         if (address(userTokenAssignment[msg.sender]) == address(0)) {
             // "randomly" assign token based on sender address
-            ISuperToken userToken = msg.sender > middleAddress
-                ? _distToken0
-                : _distToken1;
+            ISuperToken userToken = msg.sender > middleAddress ? _distToken0 : _distToken1;
             userTokenAssignment[msg.sender] = userToken;
             userToken.transfer(msg.sender, _distDiscreteAmount);
         }
-        cfaV1.createFlow(
-            msg.sender,
-            userTokenAssignment[msg.sender],
-            _distFlowRate
-        );
+        cfaV1.createFlow(msg.sender, userTokenAssignment[msg.sender], _distFlowRate);
     }
 }

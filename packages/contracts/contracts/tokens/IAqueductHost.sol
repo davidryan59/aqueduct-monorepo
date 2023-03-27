@@ -19,17 +19,10 @@ interface IAqueductHost {
     /**
         @return netFlowRate the net flow rate of the given token/address with respect to the aqueductHost contract
     */
-    function getTwapNetFlowRate(address token, address user)
-        external
-        view
-        returns (int96 netFlowRate);
+    function getTwapNetFlowRate(address token, address user) external view returns (int96 netFlowRate);
 
     /**
         @return reward a user's reward for the specific token at the given timestamp
     */
-    function getUserReward(
-        address token,
-        address user,
-        uint256 timestamp
-    ) external view returns (int256 reward);
+    function getUserReward(address token, address user, uint256 timestamp) external view returns (int256 reward);
 }
