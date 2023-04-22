@@ -6,16 +6,12 @@ import {SuperAppBase} from "@superfluid-finance/ethereum-contracts/contracts/app
 import {CFAv1Library} from "@superfluid-finance/ethereum-contracts/contracts/apps/CFAv1Library.sol";
 import {IConstantFlowAgreementV1} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/agreements/IConstantFlowAgreementV1.sol";
 
-import "./libraries/UQ128x128.sol";
+import "./libraries/sqrtLib.sol";
 import "./interfaces/IAqueductHost.sol";
 import "./interfaces/IAqueductToken.sol";
 import "./interfaces/IFlowScheduler.sol";
 
-import "hardhat/console.sol";
-
 contract Pool is SuperAppBase {
-    using UQ128x128 for uint256;
-
     /**************************************************************************
      * Pool/SuperApp state
      *************************************************************************/
@@ -23,20 +19,18 @@ contract Pool is SuperAppBase {
     /* --- Superfluid --- */
     using CFAv1Library for CFAv1Library.InitData;
     CFAv1Library.InitData public cfaV1;
-    bytes32 public constant CFA_ID =
-        keccak256("org.superfluid-finance.agreements.ConstantFlowAgreement.v1");
+    bytes32 public constant CFA_ID = keccak256("org.superfluid-finance.agreements.ConstantFlowAgreement.v1");
     IConstantFlowAgreementV1 cfa;
     ISuperfluid _host;
 
+    // Useful constants
+    uint256 e16 = 65536; // 2^16
+    uint256 e32 = 4294967296; // 2^32
+
     /* --- Pool variables --- */
     address public factory;
-    uint256 poolFee;
     IAqueductToken public token0;
     IAqueductToken public token1;
-    uint256 token0IndexId;
-    uint256 token1IndexId;
-    uint256 token0RewardIndexId;
-    uint256 token1RewardIndexId;
 
     /* --- Automation --- */
     IFlowScheduler public flowScheduler;
@@ -61,406 +55,318 @@ contract Pool is SuperAppBase {
     }
 
     // called once by the factory at time of deployment
-    function initialize(
-        IAqueductToken _token0,
-        IAqueductToken _token1,
-        uint224 _poolFee,
-        IFlowScheduler _flowScheduler
-    ) external {
+    function initialize(IAqueductToken _token0, IAqueductToken _token1, IFlowScheduler _flowScheduler) external {
         require(msg.sender == factory, "FORBIDDEN"); // sufficient check
         token0 = _token0;
         token1 = _token1;
-        poolFee = _poolFee;
         flowScheduler = _flowScheduler;
 
-        // create indices
-        token0IndexId = createIndex(_token0, address(this));
-        token1IndexId = createIndex(_token1, address(this));
-        token0RewardIndexId = createIndex(_token0, address(this));
-        token1RewardIndexId = createIndex(_token1, address(this));
+        // Initial values for PoolConstants
+        pc.F = 328; // 328/65536 = 0.0049896, so trading fee initially approx 0.5%
+        pc.P = 1311; // 1310/65536 = 0.019989, so initially around 2% of trading fees accumulate in protocol. Protocol must maintain positive balances at all times.
+        pc.M = 10; // M/N = 10, so liquidity providers get around 10x the rewards as traders
+        pc.N = 1; // only ratio matters, so M=100 N=5 has same outcome as M=20 N=1
+    }
+
+    modifier onlyFactory() {
+        require(msg.sender == address(factory), "Can only be called by factory");
+        _;
+    }
+
+    // Update the protocol constants
+    // This should take place only via the factory
+    // Factory should only call this after a governance proposal passes
+    // For example, reducing protocol fees and/or trading fees as volume increases in future
+    function updateProtocolConstants(uint16 _f, uint16 _p, uint16 _m, uint16 _n) external onlyFactory {
+        // When any of pool constants `pc` change, update anything that depends on them
+
+        // 1. Obtain updated pool cumulative values, these are needed throughout calculation
+        FlowCoeffs memory updatedPoolCumul = getUpdatedPoolCumul(block.timestamp);
+
+        // 2. Update protocol constants
+        pc.F = _f;
+        pc.P = _p;
+        pc.M = _m;
+        pc.N = _n;
+
+        // 3. Update pool state - PoolSums - only psm.D requires updating
+        _setRewardSumD();
+
+        // 4. Update pool state - PoolFlows
+        _updatePoolFlows(updatedPoolCumul);
+
+        // 5. Pool has streamed out tokens, settle the dynamic balances on token0, token1
+        _settleBalances(address(this), updatedPoolCumul);
+    }
+
+    // Ability for owner to withdraw arbitrary Supertokens from the pool, e.g. withdraw pool earning
+    // TODO: switch ISuperToken below to IERC20, which is more general
+    // TODO: also consider functions to allow withdrawing of ETH/network coin, also arbitrary ERC721s.
+    function withdrawToken(address _token) external onlyFactory {
+        ISuperToken token = ISuperToken(_token);
+        uint256 amount = token.balanceOf(address(this));
+        token.transfer(msg.sender, amount);
     }
 
     /**************************************************************************
      * DCFA state
      *************************************************************************/
 
-    /* --- Index data --- */
-    uint256 nextIndexId = 0;
-    struct IndexData {
-        uint32 blockTimestampLast;
-        uint96 totalFlowRate;
-        uint256 cumulativeLast; // encoded as a UQ128x128
-        uint128 totalUnits;
-        ISuperfluidToken token;
-        address publisher;
+    // Use FlowCoeffs to store coefficients in the flow equations, either current values, or cumulative sums
+    // User receives rate x of token A (token0), and rate y of token B (token1)
+    // User streams in rates a, b of tokens A, B, plus liquidity c (see struct Incoming below)
+    // Then, equations for x, y in terms of a, b, c have 6 coefficients
+    // Two of these coeffs (a_x, b_y) are the same, call them 'ret'
+    struct FlowCoeffs {
+        // uint256 a_x = ret
+        uint256 b_x;
+        uint256 c_x;
+        uint256 a_y;
+        // uint256 b_y = ret
+        uint256 c_y;
+        uint256 ret;
     }
-    mapping(uint256 => IndexData) internal indexData;
 
-    /* --- Subscriber data --- */
-    struct SubscriptionData {
-        uint256 initialCumulative;
-        uint128 units;
-        uint256 iId;
+    // Use Incoming to store CFA flow rates in for either individual users or the pool as a whole
+    struct Incoming {
+        // Incoming CFA token flows
+        uint256 a; // Rate of flowing token A in, per second
+        uint256 b; // Rate of flowing token B in, per second
+        // Incoming liquidity. Define liquidity c = sqrt(a*b)
+        uint256 c; // Rate of flowing liquidity in, per second
     }
-    struct SubscriptionEntries {
-        mapping(uint256 => bool) exists;
-        //mapping(uint256 => uint256) iIdToSubIndex;
-        //SubscriptionData[] subscriptions;
-        mapping(uint256 => SubscriptionData) subscriptions;
-        uint256[] iIds;
-    }
-    // account => token => entries
-    mapping(address => mapping(ISuperfluidToken => SubscriptionEntries))
-        internal subscriberData;
 
-    /* --- Publisher data --- */
-    struct IndexEntries {
-        mapping(uint256 => bool) exists;
-        uint256[] iIds;
+    // Use UserState to store all the state associated with an individual user/account.
+    // User's state consists of:
+    // - Their incoming rates
+    // - A cache of pool cumulatives at the last time they made a change
+    struct UserState {
+        Incoming inc; // User flows in of a, b, c
+        FlowCoeffs cumul; // Pool cumulatives at time of last user change
     }
-    // account => token => entries
-    mapping(address => mapping(ISuperfluidToken => IndexEntries))
-        internal publisherData;
+    mapping(address => UserState) internal userStates;
+
+    // Use PoolSums to store pool state associated with sums over user states
+    struct PoolSums {
+        Incoming inc; // Sum of user rates of incoming a, b, c
+        uint256 D; // Sum of reward factors
+        uint256 H; // equals sqrt(A*B), which doesn't equal C = sum(user.c)
+        // Regime indicator is whether H>0 (we can trade) or H=0 (funds are returned to user)
+    }
+    PoolSums internal psm;
+
+    // Use PoolFlows to store flow equation coefficients, both current, and cumulative sums at a timestamp
+    struct PoolFlows {
+        // Block timestamp of last update to accumulators
+        uint256 T;
+        // Cumulative flows in protocol, total units flowed up to T
+        FlowCoeffs cumul;
+        // Flow rates in tokens per second, multiplied by e32 = 2^32
+        FlowCoeffs flow32;
+    }
+    PoolFlows internal pfl;
+
+    // Use PoolConstants to store values that usually stay the same except for governance changes
+    struct PoolConstants {
+        // Control fees charged to traders and liquidity providers
+        uint16 F; // all incoming streams get deducted a fee: F / 65536
+        uint16 P; // protocol retains: fees * P / 65536
+        // Control ratio of rewards to liquidity providers (M) and traders (N)
+        // Suggest that M = 10*N is around right.
+        // All that matters is M/N, e.g. M=20 N=2 gives same outcome as M=10 N=1
+        uint16 M;
+        uint16 N;
+    }
+    PoolConstants internal pc;
 
     /**************************************************************************
      * temp DCFA implementation
      *************************************************************************/
 
+    function getCumulativeAtTime(
+        uint256 newTime,
+        uint256 oldTime,
+        uint256 oldCumul, // total tokens flowed up to oldTime
+        uint256 oldFlowRate32 // current flow rate in tokens per second between oldTime and newTime, multiplied by 2^32
+    ) private view returns (uint256 c) {
+        c = oldCumul + (oldFlowRate32 * (newTime - oldTime)) / e32;
+    }
+
+    // Calculate new cumulative FlowCoeffs, from new time and existing pool state
+    function getUpdatedPoolCumul(uint256 newTime) private view returns (FlowCoeffs memory newCumul) {
+        newCumul.b_x = getCumulativeAtTime(newTime, pfl.T, pfl.cumul.b_x, pfl.flow32.b_x);
+        newCumul.c_x = getCumulativeAtTime(newTime, pfl.T, pfl.cumul.c_x, pfl.flow32.c_x);
+        newCumul.a_y = getCumulativeAtTime(newTime, pfl.T, pfl.cumul.a_y, pfl.flow32.a_y);
+        newCumul.c_y = getCumulativeAtTime(newTime, pfl.T, pfl.cumul.c_y, pfl.flow32.c_y);
+        newCumul.ret = getCumulativeAtTime(newTime, pfl.T, pfl.cumul.ret, pfl.flow32.ret);
+    }
+
+    function getDynamicBalances(
+        int8 sign,
+        Incoming memory inc, // Incoming flow rates of user or pool between f0 and f1 snapshots
+        FlowCoeffs memory f1, // cumulative FlowCoeffs at time we want balances
+        FlowCoeffs memory f0 // cumulative FlowCoeffs at time of previous change of Incoming
+    ) private pure returns (int256, int256) {
+        uint256 xs = inc.a * (f1.ret - f0.ret) + inc.b * (f1.b_x - f0.b_x) + inc.c * (f1.c_x - f0.c_x);
+        uint256 ys = inc.a * (f1.a_y - f0.a_y) + inc.b * (f1.ret - f0.ret) + inc.c * (f1.c_y - f0.c_y);
+        return (int256(sign) * int256(xs), int256(sign) * int256(ys));
+    }
+
+    function realtimeBalances(
+        address account,
+        FlowCoeffs memory updatedPoolCumul
+    ) private view returns (int256 dynamicBalance0, int256 dynamicBalance1) {
+        int8 sign;
+        Incoming memory inc;
+        FlowCoeffs memory originalPoolCumul;
+        if (account == address(this)) {
+            // Dynamic balance of pool is negative since pool is sending out tokens
+            sign = -1;
+            inc = psm.inc;
+            originalPoolCumul = pfl.cumul;
+        } else {
+            // Dynamic balance of user address is positive since user is receiving tokens back
+            sign = 1;
+            inc = userStates[account].inc;
+            originalPoolCumul = userStates[account].cumul;
+        }
+        (dynamicBalance0, dynamicBalance1) = getDynamicBalances(sign, inc, updatedPoolCumul, originalPoolCumul);
+    }
+
     function realtimeBalanceOf(
         ISuperfluidToken token,
         address account,
         uint256 time
-    )
-        external
-        view
-        returns (int256 dynamicBalance, uint256 deposit, uint256 owedDeposit)
-    {
-        // as a subscriber
-        {
-            uint256[] memory iIdList = subscriberData[account][token].iIds;
+    ) external view returns (int256 dynamicBalance, uint256 deposit, uint256 owedDeposit) {
+        // // Have commented these out since 0 is default value
+        // dynamicBalance = 0;
+        // deposit = 0;
+        // owedDeposit = 0;
+        // // deposit and owedDeposit calculations have not been implemented yet
 
-            for (uint32 i = 0; i < iIdList.length; ++i) {
-                if (subscriberData[account][token].exists[iIdList[i]] == true) {
-                    SubscriptionData memory sdata = subscriberData[account][
-                        token
-                    ].subscriptions[iIdList[i]];
-                    IndexData memory idata = indexData[iIdList[i]];
-                    uint256 realTimeCumulative = _getCumulativeAtTime(
-                        time,
-                        idata.blockTimestampLast,
-                        idata.cumulativeLast,
-                        idata.totalFlowRate,
-                        idata.totalUnits
-                    );
-                    dynamicBalance =
-                        dynamicBalance +
-                        (
-                            int256(
-                                UQ128x128.decode(
-                                    uint256(sdata.units) *
-                                        (realTimeCumulative -
-                                            sdata.initialCumulative)
-                                )
-                            )
-                        );
-                }
-            }
+        // If token is neither token0 or token1, balances are zero, so return zeros
+        if (address(token) != address(token0) && address(token) != address(token1)) {
+            return (0, 0, 0);
         }
 
-        // as a publisher
-        {
-            uint256[] memory iIdList = publisherData[account][token].iIds;
+        FlowCoeffs memory updatedPoolCumul = getUpdatedPoolCumul(time);
+        (int256 dynamicBalance0, int256 dynamicBalance1) = realtimeBalances(account, updatedPoolCumul);
 
-            for (uint32 i = 0; i < iIdList.length; ++i) {
-                IndexData memory idata = indexData[iIdList[i]];
-                uint256 realTimeCumulative = _getCumulativeAtTime(
-                    time,
-                    idata.blockTimestampLast,
-                    idata.cumulativeLast,
-                    idata.totalFlowRate,
-                    idata.totalUnits
-                );
-                dynamicBalance =
-                    dynamicBalance -
-                    (
-                        int256(
-                            UQ128x128.decode(
-                                uint256(idata.totalUnits) *
-                                    (realTimeCumulative - idata.cumulativeLast)
-                            )
-                        )
-                    );
-            }
-        }
-
-        // TODO: design and implement deposits structure
-        deposit = 0;
-        owedDeposit = 0;
-    }
-
-    function createIndex(
-        ISuperfluidToken token,
-        address publisher
-    ) internal returns (uint256 iId) {
-        // get next index / increment counter
-        iId = nextIndexId;
-        nextIndexId++;
-
-        // add publisher
-        require(publisherData[publisher][token].exists[iId] == false);
-        publisherData[publisher][token].exists[iId] == true;
-        publisherData[publisher][token].iIds.push(iId);
-        indexData[iId].publisher = publisher;
-        indexData[iId].token = token;
-    }
-
-    function updateFlowRate(uint256 iId, uint96 totalFlowRate) internal {
-        IndexData memory idata = indexData[iId];
-
-        // settle publisher balance
-        uint256 realTimeCumulative = _getCumulativeAtTime(
-            block.timestamp,
-            idata.blockTimestampLast,
-            idata.cumulativeLast,
-            idata.totalFlowRate,
-            idata.totalUnits
-        );
-        idata.token.settleBalance(
-            idata.publisher,
-            -1 *
-                int256(
-                    UQ128x128.decode(
-                        uint256(idata.totalUnits) *
-                            (realTimeCumulative - idata.cumulativeLast)
-                    )
-                )
-        );
-
-        // "settle" cumulative based on previous multiplier
-        indexData[iId].cumulativeLast = realTimeCumulative;
-
-        // update index
-        indexData[iId].totalFlowRate = totalFlowRate;
-        indexData[iId].blockTimestampLast = uint32(block.timestamp % 2 ** 32);
-    }
-
-    function getIndexData(
-        uint256 iId
-    )
-        public
-        view
-        returns (
-            uint32 blockTimestampLast,
-            uint96 totalFlowRate,
-            uint256 cumulativeLast,
-            uint128 totalUnits
-        )
-    {
-        IndexData memory idata = indexData[iId];
-        blockTimestampLast = idata.blockTimestampLast;
-        totalFlowRate = idata.totalFlowRate;
-        cumulativeLast = idata.cumulativeLast;
-        totalUnits = idata.totalUnits;
-    }
-
-    function crudSubscription(
-        uint256 iId,
-        address account,
-        uint128 units
-    ) internal {
-        IndexData memory idata = indexData[iId];
-        if (units > 0) {
-            if (subscriberData[account][idata.token].exists[iId] == false) {
-                // create
-                subscriberData[account][idata.token].iIds.push(iId);
-                subscriberData[account][idata.token].exists[iId] = true;
-            }
-
-            // update
-            _updateSubscription(iId, account, units);
+        // Return the correct component
+        if (address(token) == address(token0)) {
+            dynamicBalance = dynamicBalance0;
         } else {
-            // delete
-            // TODO: find way to remove from sId list
-            // TEMP: just set exist flag to false
-            subscriberData[account][idata.token].exists[iId] = false;
-            _updateSubscription(iId, account, 0);
+            // address(token) == address(token1)
+            dynamicBalance = dynamicBalance1;
         }
     }
 
-    function _updateSubscription(
-        uint256 iId,
-        address account,
-        uint128 units
-    ) internal {
-        IndexData memory idata = indexData[iId];
-        SubscriptionData memory sdata = subscriberData[account][idata.token]
-            .subscriptions[iId];
+    function _updateUserState(address user, FlowCoeffs memory updatedPoolCumul) internal returns (Incoming memory) {
+        // Store a copy of previous user Incoming values
+        Incoming memory userPrevInc = userStates[user].inc;
 
-        // settle user's balance
-        uint256 realTimeCumulative = _getCumulativeAtTime(
-            block.timestamp,
-            idata.blockTimestampLast,
-            idata.cumulativeLast,
-            idata.totalFlowRate,
-            idata.totalUnits
-        );
-        idata.token.settleBalance(
-            account,
-            int256(
-                UQ128x128.decode(
-                    uint256(sdata.units) *
-                        (realTimeCumulative - sdata.initialCumulative)
-                )
-            )
-        );
+        // Get updated CFA flows in - note although these are int96, they should always be positive or zero
+        (, int96 _a_new, , ) = cfa.getFlow(token0, user, address(this));
+        (, int96 _b_new, , ) = cfa.getFlow(token1, user, address(this));
+        // Make new incoming values
+        uint256 a_new = uint256(uint96(_a_new)); // TODO: need to Safecast this
+        uint256 b_new = uint256(uint96(_b_new));
+        uint256 c_new = sqrtLib.sqrt(a_new * b_new);
+        // Store new incoming values, as well as updated pool cumulatives
+        userStates[user].inc.a = a_new;
+        userStates[user].inc.b = b_new;
+        userStates[user].inc.c = c_new;
+        userStates[user].cumul = updatedPoolCumul;
 
-        // settle publisher's balance
-        idata.token.settleBalance(
-            idata.publisher,
-            -1 *
-                int256(
-                    UQ128x128.decode(
-                        uint256(idata.totalUnits) *
-                            (realTimeCumulative - idata.cumulativeLast)
-                    )
-                )
-        );
-
-        // settle index cumulative and update variables
-        indexData[iId].cumulativeLast = _getCumulativeAtTime(
-            block.timestamp,
-            idata.blockTimestampLast,
-            idata.cumulativeLast,
-            idata.totalFlowRate,
-            idata.totalUnits
-        );
-        indexData[iId].totalUnits -= sdata.units;
-        indexData[iId].totalUnits += units;
-        indexData[iId].blockTimestampLast = uint32(block.timestamp % 2 ** 32);
-
-        // update subscription
-        subscriberData[account][idata.token].subscriptions[iId].units = units;
-        subscriberData[account][idata.token]
-            .subscriptions[iId]
-            .initialCumulative = indexData[iId].cumulativeLast;
+        return userPrevInc;
     }
 
-    function getSubscriberData(
-        ISuperfluidToken token,
-        address account,
-        uint256 iId
-    ) public view returns (uint256 initialCumulative, uint128 units) {
-        SubscriptionData memory sdata = subscriberData[account][token]
-            .subscriptions[iId];
-        initialCumulative = sdata.initialCumulative;
-        units = sdata.units;
+    function _setRewardSumD() internal {
+        psm.D = pc.M * psm.H * psm.inc.c + 2 * pc.N * psm.inc.a * psm.inc.b;
     }
 
-    function _getCumulativeAtTime(
-        uint256 timestamp,
-        uint32 blockTimestampLast,
-        uint256 cumulativeLast,
-        uint96 totalFlowRate,
-        uint128 totalUnits
-    ) private pure returns (uint256 c) {
-        c =
-            cumulativeLast +
-            (UQ128x128.encode(uint128(totalFlowRate)).uqdiv(totalUnits) *
-                (timestamp - uint256(blockTimestampLast)));
+    function _updatePoolSums(Incoming memory userPrevInc, Incoming memory userNewInc) internal {
+        // Update the pool state PoolSums
+        // TODO is it necessary to do each of these in 2 stages? otherwise overflow error?
+        psm.inc.a = psm.inc.a - userPrevInc.a; // update flow of token0 (token A)
+        psm.inc.a = psm.inc.a + userNewInc.a;
+        psm.inc.b = psm.inc.b - userPrevInc.b; // update flow of token1 (token B)
+        psm.inc.b = psm.inc.b + userNewInc.b;
+        psm.inc.c = psm.inc.c - userPrevInc.c; // update flow of liquidity
+        psm.inc.c = psm.inc.c + userNewInc.c;
+        psm.H = sqrtLib.sqrt(psm.inc.a * psm.inc.b); // cache this square root
+        _setRewardSumD();
     }
 
-    /**************************************************************************
-     * Superfluid callbacks
-     *************************************************************************/
+    function _updatePoolFlows(FlowCoeffs memory updatedPoolCumul) internal {
+        // Cumulatives do not change within a block (eliminating many in-block MEV attacks)
+        if (pfl.T < block.timestamp) {
+            pfl.T = block.timestamp;
+            pfl.cumul = updatedPoolCumul;
+        }
 
-    struct SwapData {
-        address user;
-        uint256 tokenIId;
-        uint256 oppTokenIId;
-        uint256 tokenRewardIId;
-        uint256 oppTokenRewardIId;
-        uint128 tokenFlowIn;
-        uint128 oppTokenFlowIn;
-        uint128 poolTokenFlowIn;
-        uint128 poolOppTokenFlowIn;
+        // Current flow rates can change within a block, and have two regimes
+        if (psm.H > 0) {
+            // Operating regime where both token0 and token1 are flowing in, so do streaming swap
+            uint256 alpha = e16 * (e16 - pc.F); // (1 - Trading Fee) * 2^32
+            uint256 beta = pc.F * (e16 - pc.P); // Rewards * 2^32 = Trading Fee * (1 - Protocol Fee) * 2^32
+            pfl.flow32.ret = (beta * pc.N * psm.inc.a * psm.inc.b) / psm.D;
+            pfl.flow32.c_x = (beta * pc.M * psm.H * psm.inc.a) / psm.D; // Extra factor of e32 to remove later
+            pfl.flow32.c_y = (beta * pc.M * psm.H * psm.inc.b) / psm.D;
+            pfl.flow32.a_y = (alpha * psm.inc.b) / psm.inc.a + (beta * pc.N * psm.inc.b * psm.inc.b) / psm.D;
+            pfl.flow32.b_x = (alpha * psm.inc.a) / psm.inc.b + (beta * pc.N * psm.inc.a * psm.inc.a) / psm.D;
+        } else {
+            // Degenerate regime where total flow of either token0 or token1 (or both) is zero, so return all funds
+            pfl.flow32.b_x = 0;
+            pfl.flow32.c_x = 0;
+            pfl.flow32.a_y = 0;
+            pfl.flow32.c_y = 0;
+            pfl.flow32.ret = e32; // Will divide out e32 again later
+        }
     }
 
-    function _handleCallback(
-        ISuperToken _superToken,
-        bytes calldata _agreementData
-    ) internal {
+    function _settleBalances(address addr, FlowCoeffs memory updatedPoolCumul) internal {
+        (int256 diff0, int256 diff1) = realtimeBalances(addr, updatedPoolCumul);
+        token0.settleBalance(addr, diff0);
+        token1.settleBalance(addr, diff1);
+    }
+
+    // Currently this will be called when a user creates, updates, or deletes
+    // an incoming stream of token0 or token1
+    // TODO: There may also be protocol changes to parameters to consider
+    function _handleCallback(ISuperToken _superToken, bytes calldata _agreementData) internal {
         require(
-            address(_superToken) == address(token0) ||
-                address(_superToken) == address(token1),
+            address(_superToken) == address(token0) || address(_superToken) == address(token1),
             "RedirectAll: token not in pool"
         );
 
-        SwapData memory sdata;
-        (sdata.user, ) = abi.decode(_agreementData, (address, address));
-        (
-            sdata.tokenIId,
-            sdata.oppTokenIId,
-            sdata.tokenRewardIId,
-            sdata.oppTokenRewardIId
-        ) = getIndexIds(_superToken);
-        (
-            sdata.tokenFlowIn,
-            sdata.oppTokenFlowIn,
-            sdata.poolTokenFlowIn,
-            sdata.poolOppTokenFlowIn
-        ) = getTokenFlows(
-            _superToken,
-            address(_superToken) == address(token0) ? token1 : token0,
-            sdata.user
-        );
+        // 1. Get address of user that has updated their CFA flows into this contract
+        (address user, ) = abi.decode(_agreementData, (address, address));
 
-        // add user as subscriber (units == flow in)
-        crudSubscription(sdata.oppTokenIId, sdata.user, sdata.tokenFlowIn);
+        // 2. Obtain updated pool cumulative values, these are needed throughout calculation
+        FlowCoeffs memory updatedPoolCumul = getUpdatedPoolCumul(block.timestamp);
 
-        // if LP, add them as subscriber to rewards index (update for both tokens)
-        uint256 rewardPercentage = getRewardPercentage(
-            sdata.tokenFlowIn,
-            sdata.oppTokenFlowIn,
-            sdata.poolTokenFlowIn,
-            sdata.poolOppTokenFlowIn
-        );
-        // safe downcast from uint256 to uint128 -> flowIn is uint128 and feePercentage <= 1
-        crudSubscription(
-            sdata.tokenRewardIId,
-            sdata.user,
-            uint128(UQ128x128.decode(sdata.oppTokenFlowIn * rewardPercentage))
-        );
-        crudSubscription(
-            sdata.oppTokenRewardIId,
-            sdata.user,
-            uint128(UQ128x128.decode(sdata.tokenFlowIn * rewardPercentage))
-        );
+        // 3. Update user's state
+        Incoming memory userPrevInc = _updateUserState(user, updatedPoolCumul);
 
-        // update total flow of incoming token
-        updateFlowRate(
-            sdata.tokenIId,
-            (uint96(sdata.poolTokenFlowIn) * 99) / 100
-        ); // this adds a 1% pool fee
-        //updateFlowRate(sdata.tokenIId, uint96(sdata.poolTokenFlowIn));
+        // 4. Update pool state - PoolSums
+        Incoming memory userNewInc = userStates[user].inc;
+        _updatePoolSums(userPrevInc, userNewInc);
 
-        // update flow of rewards index
-        updateFlowRate(
-            sdata.tokenRewardIId,
-            (uint96(sdata.poolTokenFlowIn) * 1) / 100
-        ); // assuming 1% pool fee
+        // 5. Update pool state - PoolFlows
+        _updatePoolFlows(updatedPoolCumul);
+
+        // 6. Pool has streamed out tokens, settle the dynamic balances on token0, token1
+        _settleBalances(address(this), updatedPoolCumul);
+
+        // 7. Users have received tokens, settle the dynamic balances on the tokens
+        _settleBalances(user, updatedPoolCumul);
     }
 
-    function createFlowSchedule(
-        ISuperToken _superToken,
-        address _sender,
-        uint256 _endDate
-    ) internal {
+    function createFlowSchedule(ISuperToken _superToken, address _sender, uint256 _endDate) internal {
         if (_endDate <= block.timestamp) revert STREAM_END_DATE_BEFORE_NOW();
 
-        _grantFlowOperatorPermissions(
-            address(_superToken),
-            address(flowScheduler)
-        );
+        _grantFlowOperatorPermissions(address(_superToken), address(flowScheduler));
 
         flowScheduler.createFlowSchedule(
             _superToken,
@@ -479,10 +385,7 @@ contract Pool is SuperAppBase {
      * @param _flowSuperToken Super token address
      * @param _flowOperator The permission grantee address
      */
-    function _grantFlowOperatorPermissions(
-        address _flowSuperToken,
-        address _flowOperator
-    ) internal {
+    function _grantFlowOperatorPermissions(address _flowSuperToken, address _flowOperator) internal {
         _host.callAgreement(
             cfa,
             abi.encodeCall(
@@ -498,6 +401,13 @@ contract Pool is SuperAppBase {
             "0x"
         );
     }
+
+    // TODO
+    // before Agreement Created / Updated / Deleted (or could this be in the After?)
+    // raise error if it is not a CFA (e.g. an IDA or something else...)
+    //  - probably from _agreementData
+    // raise error if CFA magnitudes are out of bounds, e.g. if `a` is a uint256 but not uint128 we get overflow on calc of `c`
+    // (there  may be other cases!)
 
     function afterAgreementCreated(
         ISuperToken _superToken,
@@ -549,187 +459,8 @@ contract Pool is SuperAppBase {
         newCtx = _ctx;
     }
 
-    /**************************************************************************
-     * Helpers
-     *************************************************************************/
-
-    function getFlowRateIn(
-        ISuperToken token,
-        address user
-    ) internal view returns (uint128) {
-        (, int96 flowRate, , ) = cfa.getFlow(token, user, address(this));
-        return uint128(uint96(flowRate));
-    }
-
-    function getIndexIds(
-        ISuperToken token
-    )
-        internal
-        view
-        returns (
-            uint256 tokenIId,
-            uint256 oppTokenIId,
-            uint256 tokenRewardIId,
-            uint256 oppTokenRewardIId
-        )
-    {
-        if (address(token) == address(token0)) {
-            tokenIId = token0IndexId;
-            oppTokenIId = token1IndexId;
-            tokenRewardIId = token0RewardIndexId;
-            oppTokenRewardIId = token1RewardIndexId;
-        } else {
-            tokenIId = token1IndexId;
-            oppTokenIId = token0IndexId;
-            tokenRewardIId = token1RewardIndexId;
-            oppTokenRewardIId = token0RewardIndexId;
-        }
-    }
-
-    function getTokenFlows(
-        ISuperToken token,
-        ISuperToken oppToken,
-        address user
-    )
-        internal
-        view
-        returns (
-            uint128 tokenFlowIn,
-            uint128 oppTokenFlowIn,
-            uint128 poolTokenFlowIn,
-            uint128 poolOppTokenFlowIn
-        )
-    {
-        (, int96 _tokenFlowIn, , ) = cfa.getFlow(token, user, address(this));
-        (, int96 _oppTokenFlowIn, , ) = cfa.getFlow(
-            oppToken,
-            user,
-            address(this)
-        );
-        poolTokenFlowIn = uint128(uint96(cfa.getNetFlow(token, address(this))));
-        poolOppTokenFlowIn = uint128(
-            uint96(cfa.getNetFlow(oppToken, address(this)))
-        );
-        tokenFlowIn = uint128(uint96(_tokenFlowIn));
-        oppTokenFlowIn = uint128(uint96(_oppTokenFlowIn));
-    }
-
-    function getRewardPercentage(
-        uint128 tokenFlow,
-        uint128 oppTokenFlow,
-        uint128 poolTokenFlow,
-        uint128 poolOppTokenFlow
-    ) internal pure returns (uint256) {
-        // handle special case
-        if (oppTokenFlow == 0 || poolOppTokenFlow == 0) {
-            return 0;
-        }
-
-        // TODO: check that int96 -> uint128 cast is safe - expected that a flow between sender and receiver will always be positive
-        uint256 userRatio = UQ128x128.encode(tokenFlow).uqdiv(oppTokenFlow);
-        uint256 poolRatio = UQ128x128.encode(poolTokenFlow).uqdiv(
-            poolOppTokenFlow
-        );
-
-        if ((userRatio + poolRatio) == 0) {
-            return 0;
-        } else {
-            return
-                UQ128x128.Q128 -
-                (difference(userRatio, poolRatio) / (userRatio + poolRatio));
-        }
-    }
-
-    // computes the absolute difference between two unsigned values
-    function difference(uint256 x, uint256 y) internal pure returns (uint256) {
-        return x > y ? x - y : y - x;
-    }
-
     modifier onlyHost() {
-        require(
-            msg.sender == address(cfaV1.host),
-            "RedirectAll: support only one host"
-        );
+        require(msg.sender == address(cfaV1.host), "RedirectAll: support only one host");
         _;
-    }
-
-    /**************************************************************************
-     * Getters
-     *************************************************************************/
-
-    function _getUserData(
-        ISuperToken token,
-        address account,
-        uint256 time,
-        uint256 iId
-    )
-        internal
-        view
-        returns (
-            uint256 initialCumulative,
-            uint256 realTimeCumulative,
-            uint128 units
-        )
-    {
-        (initialCumulative, units) = getSubscriberData(token, account, iId);
-
-        (
-            uint32 blockTimestampLast,
-            uint96 totalFlowRate,
-            uint256 cumulativeLast,
-            uint128 totalUnits
-        ) = getIndexData(iId);
-
-        realTimeCumulative = _getCumulativeAtTime(
-            time,
-            blockTimestampLast,
-            cumulativeLast,
-            totalFlowRate,
-            totalUnits
-        );
-    }
-
-    function getUserSwapData(
-        ISuperToken token,
-        address account,
-        uint256 time
-    )
-        external
-        view
-        returns (
-            uint256 initialCumulative,
-            uint256 realTimeCumulative,
-            uint128 units
-        )
-    {
-        (initialCumulative, realTimeCumulative, units) = _getUserData(
-            token,
-            account,
-            time,
-            address(token) == address(token0) ? token0IndexId : token1IndexId
-        );
-    }
-
-    function getUserRewardData(
-        ISuperToken token,
-        address account,
-        uint256 time
-    )
-        external
-        view
-        returns (
-            uint256 initialCumulative,
-            uint256 realTimeCumulative,
-            uint128 units
-        )
-    {
-        (initialCumulative, realTimeCumulative, units) = _getUserData(
-            token,
-            account,
-            time,
-            address(token) == address(token0)
-                ? token0RewardIndexId
-                : token1RewardIndexId
-        );
     }
 }
