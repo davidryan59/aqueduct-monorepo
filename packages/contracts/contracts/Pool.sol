@@ -308,13 +308,13 @@ contract Pool is SuperAppBase {
         // Current flow rates can change within a block, and have two regimes
         if (psm.H > 0) {
             // Operating regime where both token0 and token1 are flowing in, so do streaming swap
-            uint256 alpha = e16 * (e16 - pc.F); // (1 - Trading Fee) * 2^32
-            uint256 beta = pc.F * (e16 - pc.P); // Rewards * 2^32 = Trading Fee * (1 - Protocol Fee) * 2^32
-            pfl.flow32.ret = (beta * pc.N * psm.inc.a * psm.inc.b) / psm.D;
-            pfl.flow32.c_x = (beta * pc.M * psm.H * psm.inc.a) / psm.D; // Extra factor of e32 to remove later
-            pfl.flow32.c_y = (beta * pc.M * psm.H * psm.inc.b) / psm.D;
-            pfl.flow32.a_y = (alpha * psm.inc.b) / psm.inc.a + (beta * pc.N * psm.inc.b * psm.inc.b) / psm.D;
-            pfl.flow32.b_x = (alpha * psm.inc.a) / psm.inc.b + (beta * pc.N * psm.inc.a * psm.inc.a) / psm.D;
+            uint256 u = e16 * (e16 - pc.F); // (1 - Trading Fee) * 2^32
+            uint256 v = pc.F * (e16 - pc.P); // Rewards * 2^32 = Trading Fee * (1 - Protocol Fee) * 2^32
+            pfl.flow32.ret = (v * pc.N * psm.inc.a * psm.inc.b) / psm.D;
+            pfl.flow32.c_x = (v * pc.M * psm.H * psm.inc.a) / psm.D; // Extra factor of e32 to remove later
+            pfl.flow32.c_y = (v * pc.M * psm.H * psm.inc.b) / psm.D;
+            pfl.flow32.a_y = (u * psm.inc.b) / psm.inc.a + (v * pc.N * psm.inc.b * psm.inc.b) / psm.D;
+            pfl.flow32.b_x = (u * psm.inc.a) / psm.inc.b + (v * pc.N * psm.inc.a * psm.inc.a) / psm.D;
         } else {
             // Degenerate regime where total flow of either token0 or token1 (or both) is zero, so return all funds
             pfl.flow32.b_x = 0;
